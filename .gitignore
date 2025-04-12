@@ -3,4 +3,6 @@
 .RData
 .Ruserdata
 
+# Ignore large files
+
 *.csv
