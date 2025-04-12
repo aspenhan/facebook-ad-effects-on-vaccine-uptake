@@ -1,0 +1,399 @@
+---
+title: "Differential effects of advertisement strategies on vaccine uptake: data analysis"
+author: "Aspen Han"
+editor_options: 
+  chunk_output_type: console
+knitr:
+  opts_chunk:
+    out.width: "75%"
+execute:
+  echo: false
+format:
+  pdf:
+    pdf-engine: xelatex
+    keep-tex: true
+    documentmode: man
+    mainfont: Times New Roman
+    sansfont: Garamond
+    mathfont: Cambria Math
+    fontsize: "12"
+    linestretch: 2
+    top-level-division: section
+    floatsintext: true
+    fig-width: 6
+    fig-asp: 0.618
+    fig-align: center
+    include-in-header:
+      text: |
+        \usepackage{sectsty}
+        \sectionfont{\centering}
+        \subsectionfont{\raggedright}
+        \usepackage{indentfirst}
+        \setlength{\parindent}{3em}
+        \usepackage{amsmath}
+        \usepackage{amssymb}
+        \usepackage{enumitem}
+        \setlist[itemize]{topsep=0pt,itemsep=0pt,partopsep=0pt,parsep=0pt}
+        \setlist[enumerate]{topsep=0pt,itemsep=0pt,partopsep=0pt,parsep=0pt}
+        \usepackage{caption}
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+#Load packages
+
+## Data reading and writing, transformation, and visualisation
+library(tidyverse)
+library(broom) #turns function output into tidy tibbles
+
+## Statistical analysis
+library(DescTools) #descriptive stats
+library(car) #basic regression analysis
+library(sandwich) #estimate robust errors
+library(estimatr) #run robust and other more complex regressions and analysis
+library(AER) #run IV regressions
+library(nnet) #run multinomial logistic regressions
+library(fixest) #run fixed effects regressions
+library(lmtest) #run diagnostic tests on linear models
+
+## Tables
+library(texreg) #make regression tables
+library(gtsummary) #make summary stats tables
+library(gt) #make general tables
+
+```
+
+```{r}
+#| label: default-plot-themes
+#| include: false
+
+# Set default theme for ggplot; serif is times new roman
+
+def_theme <- theme(plot.title = element_text(family = "serif", size = 13, hjust = 0.5),
+                   axis.title = element_text(family = "serif", size = 12),
+                   axis.text = element_text(family = "serif", size = 11),
+                   strip.text.x = element_text(family = "serif", size = 12),
+                   strip.text.y = element_text(family = "serif", size = 12, angle = 0),
+                   legend.title = element_text(family = "serif", size = 12),
+                   legend.text = element_text(family = "serif", size = 11))
+
+```
+
+```{r}
+#| label: read-in-data
+#| include: false
+
+treatment <- read_csv("treatment-data.csv")
+
+endline <- read_csv("endline-data.csv")
+
+```
+
+```{r}
+#| label: convert-data-types
+
+treatment <- treatment %>%
+    mutate(gender = factor(gender), race = factor(race),
+         edu = factor(edu, levels = c("below high school", "high school", "some college", "bachelor's or above")),
+         income_bracket = factor(income_bracket, levels = c("<25k", "25k-<50k", "50k-<75k", "75k-<120k", "120k-<200k", ">=200k")),
+         state = factor(state),
+         age_group = factor(age_group, levels = c("<30", "30-44", "45-64", "65+")),
+         treatment = factor(treatment, levels = c("pathos", "logos", "control")))
+         
+endline <- endline %>%
+  mutate(gender = factor(gender), race = factor(race),
+         edu = factor(edu, levels = c("below high school", "high school", "some college", "bachelor's or above")),
+         income_bracket = factor(income_bracket, levels = c("<25k", "25k-<50k", "50k-<75k", "75k-<120k", "120k-<200k", ">=200k")),
+         state = factor(state),
+         age_group = factor(age_group, levels = c("<30", "30-44", "45-64", "65+")),
+         treatment = factor(treatment, levels = c("pathos", "logos", "control")))
+
+```
+
+Following the simulation of the field experiment, I turn to analyze its data. Foremost, I check whether attrition has eroded the internal validity of the study, before proceeding to check for average and differential effects of Facebook ad campaigns on Covid-19 vaccine uptake.
+
+## Covariate balance post-attrition
+
+Using covariates[^1] as a proxy for potential outcomes, I first check whether they are balanced between treatment groups in the endline sample, as presented in @tbl-cov-balance-endline. This checks whether we can recover causal ATE estimates among the respondents, and indeed the table shows no significant differences in any of the covariates between treatment groups. Note if there were significant differences found at the individual covariate level, one would still have to correct for multiple hypotheses testing, or just a joint test of covariates to ascertain actual differences.
+
+I also check for covariate balance between the baseline and endline sample, which helps to inform whether we can recover ATE for the whole sample. @tbl-cov-balance-full shows that there is a sole significant difference in initial willingness to take the updated 2024-2025 Covid-19 vaccine (p-value = 0.043) although this will likely not hold after correcting for multiple hypotheses testing or using a joint test.
+
+Hence, it is likely that causal treatment effects can be consistently estimated, though this was somewhat by construction since I simulated the attrition to be random. In reality, treatment receipt may affect attrition if for some reason people exposed to the ad campaigns were more or less likely to return for the endline survey (e.g. they are more likely as they felt more engaged by the increased ad exposure) which would reintroduce selection bias effects. Running the above tests are important to establish continued internal validity of longitudinal studies like this which are susceptible to attrition.
+
+[^1]: States have been omitted from this and subsequent analysis and it introduces too much dimensionality and restrictions on degrees of freedom.
+
+```{r}
+#| label: tbl-cov-balance-endline
+#| tbl-cap: "Covariate balance across treatment groups in the endline sample"
+
+# Create summary statistics of covariates
+
+cov_sumstats_endline <- tbl_summary(endline, #dataframe to summarise
+                                    missing = "no", #do not state number of observations with missing values
+                                    by = treatment, #group by treatment
+                                    include = c(gender, race, age_group, edu, income_bracket, fb_usage, vax_percpt), #select variables to include
+                                    statistic = list(all_continuous() ~ "{mean} ({sd})",
+                                                     all_categorical() ~ "{n} ({p}%)") #specify sumstats to compute for each variable type
+) %>%
+  add_p() %>%
+  bold_p()
+
+cov_sumstats_endline
+
+```
+
+```{r}
+#| label: tbl-cov-balance-full
+#| tbl-cap: "Covariate balance across baseline and endline"
+
+# create a variable for whether subjects in the full sample responded at endline
+
+treatment$endline_response <- ifelse(treatment$identifier %in% endline$identifier, 1, 0)
+
+cov_sumstats_full <- tbl_summary(treatment,
+                                 by = endline_response,
+                                 include = c(gender, race, age_group, edu, income_bracket, fb_usage, vax_percpt),
+                                 statistic = list(all_continuous() ~ "{mean} ({sd})",
+                                                  all_categorical() ~ "{n} ({p}%)")
+) %>%
+  add_p() %>%
+  bold_p()
+                                 
+                                 
+cov_sumstats_full
+
+```
+
+## Average treatment effects from ad exposure
+
+I regress the new willingness to take the updated vaccine on a treatment dummy for whether the subject was exposed to an ad campaign at all (and other covariates), measuring an intention to treat (ITT) effect. I also use treatment as an instrument for ad awareness, to measure the local average treatment effect (LATE) of the ad campaign on vaccine uptake among those who were actually engaged with it.
+
+@tbl-reg-avg-effects shows the results. Both ITT and LATE (coefficients on `ad_exposed` and `ad_aware` respectively) are significant and quite similar, with LATE being stronger as expected since people who engage more with the ads are likely to be more influenced by them. Controlling for covariates does not affect the ITT estimate much though it reduces the standard error considerably. Overall, ad campaigns are associated with around a 0.4 increase in willingness to take the updated vaccine, which corresponds to a jump up of almost half a category, which is quite substantial given the campaign only lasted one month, though it is difficult to say how effects would scale with time.
+
+In terms of covariate effects, one notable finding is that initial vaccine perceptions show a significantly high and positive correlation with later vaccine perceptions, suggesting people who already viewed the vaccines more favourably to begin are more amenable to them in the future. Given its huge standalone effect, I considered its interplay with ad campaign exposure effects, which found a significantly negative interaction effect (coefficient of -0.22, p-value < 0.01). This means ad campaigns are not only less effective on those who already were willing to get the updated effect but may reverse their perceptions, perhaps due to annoyance or crowding out effects, so there are perhaps unintended consequences on top of limited scope of gains we have to bear in mind when deciding who to target such ads to.
+
+```{r}
+#| label: create-variables
+
+endline <- endline %>%
+  mutate(ad_exposed = ifelse(treatment == "control", 0, 1),
+         ad_aware = ifelse(ad_awareness == "No", 0, 1))
+
+```
+
+```{r}
+#| label: run-regression-average-effects
+
+# ITT regression with only the treatment dummy as a regressor
+
+reg_itt_basic <- lm_robust(new_vax_percpt ~ ad_exposed, endline)
+
+# ITT regression with other covariates as regressors also
+
+reg_itt_ext <- lm_robust(new_vax_percpt ~ ad_exposed + gender + race + age_group + edu + income_bracket + fb_usage + vax_percpt, endline)
+
+# LATE regression
+reg_late <- ivreg(formula = (new_vax_percpt ~ ad_aware + gender + race + age_group + edu + income_bracket + fb_usage + vax_percpt|ad_exposed + gender + race + age_group + edu + income_bracket + fb_usage + vax_percpt), data = endline)
+
+reg_models_avg <- list(reg_itt_basic, reg_itt_ext, reg_late)
+
+```
+
+```{r}
+#| label: tabulate-regression-average-effects
+#| include: false
+
+reg_table_avg <- texreg(reg_models_avg, #regression outputs to use
+                        stars = c(0.01, 0.05, 0.1), #significance indicators
+                        include.ci = FALSE, #use standard errors for estimates
+                        custom.model.names = c("ITT: No controls", "ITT: With controls", "LATE"),
+                    #name models
+                        custom.header = list("New willingness for vaccine uptake" = 1:3),
+                    #label dependent variable above model names
+                        include.rsquared = FALSE,
+                        include.rmse = FALSE,
+                        caption = NULL)
+
+reg_table_avg
+
+```
+
+::: {#tbl-reg-avg-effects}
+
+\begin{table}
+\begin{center}
+\begin{tabular}{l c c c}
+\hline
+ & \multicolumn{3}{c}{New willingness for vaccine uptake} \\
+\cline{2-4}
+ & ITT: No controls & ITT: With controls & LATE \\
+\hline
+(Intercept)                 & $2.75^{***}$ & $0.34^{***}$  & $0.41^{***}$ \\
+                            & $(0.04)$     & $(0.04)$      & $(0.05)$     \\
+ad\_exposed                 & $0.37^{***}$ & $0.40^{***}$  &              \\
+                            & $(0.05)$     & $(0.01)$      &              \\
+gendermale                  &              & $0.04^{***}$  & $0.03^{**}$  \\
+                            &              & $(0.01)$      & $(0.01)$     \\
+raceblack                   &              & $0.02$        & $0.01$       \\
+                            &              & $(0.03)$      & $(0.03)$     \\
+racehispanic                &              & $-0.01$       & $-0.00$      \\
+                            &              & $(0.03)$      & $(0.03)$     \\
+raceother                   &              & $-0.05$       & $-0.05$      \\
+                            &              & $(0.05)$      & $(0.06)$     \\
+racewhite                   &              & $-0.01$       & $-0.01$      \\
+                            &              & $(0.03)$      & $(0.03)$     \\
+age\_group30-44             &              & $-0.03$       & $-0.02$      \\
+                            &              & $(0.02)$      & $(0.02)$     \\
+age\_group45-64             &              & $-0.01$       & $-0.00$      \\
+                            &              & $(0.02)$      & $(0.02)$     \\
+age\_group65+               &              & $-0.05^{***}$ & $-0.05^{**}$ \\
+                            &              & $(0.02)$      & $(0.02)$     \\
+eduhigh school              &              & $-0.03$       & $-0.03$      \\
+                            &              & $(0.03)$      & $(0.03)$     \\
+edusome college             &              & $0.00$        & $0.01$       \\
+                            &              & $(0.03)$      & $(0.03)$     \\
+edubachelor's or above      &              & $-0.04$       & $-0.03$      \\
+                            &              & $(0.03)$      & $(0.04)$     \\
+income\_bracket25k-$<$50k   &              & $0.03$        & $0.04$       \\
+                            &              & $(0.03)$      & $(0.03)$     \\
+income\_bracket50k-$<$75k   &              & $0.04$        & $0.05$       \\
+                            &              & $(0.03)$      & $(0.03)$     \\
+income\_bracket75k-$<$120k  &              & $0.03$        & $0.04$       \\
+                            &              & $(0.04)$      & $(0.04)$     \\
+income\_bracket120k-$<$200k &              & $0.04$        & $0.06$       \\
+                            &              & $(0.04)$      & $(0.05)$     \\
+income\_bracket$>$=200k     &              & $0.09$        & $0.09$       \\
+                            &              & $(0.07)$      & $(0.08)$     \\
+fb\_usage                   &              & $0.01^{***}$  & $-0.01^{**}$ \\
+                            &              & $(0.00)$      & $(0.00)$     \\
+vax\_percpt                 &              & $0.86^{***}$  & $0.86^{***}$ \\
+                            &              & $(0.00)$      & $(0.00)$     \\
+ad\_aware                   &              &               & $0.43^{***}$ \\
+                            &              &               & $(0.02)$     \\
+\hline
+Adj. R$^2$                  & $0.02$       & $0.90$        & $0.90$       \\
+Num. obs.                   & $4500$       & $4500$        & $4500$       \\
+\hline
+\multicolumn{4}{l}{\scriptsize{$^{***}p<0.01$; $^{**}p<0.05$; $^{*}p<0.1$}}
+\end{tabular}
+\label{table:coefficients}
+\end{center}
+\end{table}
+
+Average effects of Facebook ad campaigns on vaccine uptake
+
+:::
+
+```{r}
+#| label: interaction-effects
+#| include: false
+
+reg_itt_int <- lm_robust(new_vax_percpt ~ ad_exposed + gender + race + age_group + edu + income_bracket + fb_usage + vax_percpt + ad_exposed*vax_percpt, endline)
+
+reg_itt_int
+
+```
+
+
+## Differential effects of ad campaign strategies
+
+Finally, I am interested in how logos and pathos used in ads differ in their efficacy of increasing willingness for vaccine uptake. This time, I regress the same outcome variable but on the treatment groups, with pathos as the baseline (omitted regressor). @tbl-reg-avg-effects shows that ad campaigns appealing to reason are more effective at encouraging vaccine uptake than those appealing to emotions, being a third more likely to induce people to move up a category in their likelihood of getting an updated vaccine shot. It would be interesting to understand what features of the context can contribute to these differences.
+
+```{r}
+#| label: run-regression-differential-effects
+
+reg_diff_basic <- lm_robust(new_vax_percpt ~ treatment, endline)
+
+reg_diff_ext <- lm_robust(new_vax_percpt ~ treatment + gender + race + age_group + edu + income_bracket + fb_usage + vax_percpt, endline)
+
+reg_models_diff <- list(reg_diff_basic, reg_diff_ext)
+
+```
+
+```{r}
+#| label: tabulate-regression-differential-effects
+#| include: false
+
+reg_table_diff <- texreg(reg_models_diff, #regression outputs to use
+                         stars = c(0.01, 0.05, 0.1), #significance indicators
+                         include.ci = FALSE, #use standard errors for estimates
+                         custom.model.names = c("No controls", "With controls"),
+                    #name models
+                         custom.header = list("New willingness for vaccine uptake" = 1:2),
+                    #label dependent variable above model names
+                         include.rsquared = FALSE,
+                         include.rmse = FALSE,
+                         caption = NULL)
+
+reg_table_diff
+
+```
+
+::: {#tbl-reg-avg-effects}
+
+\begin{table}
+\begin{center}
+\begin{tabular}{l c c}
+\hline
+ & \multicolumn{2}{c}{New willingness for vaccine uptake} \\
+\cline{2-3}
+ & No controls & With controls \\
+\hline
+(Intercept)                 & $2.90^{***}$  & $0.56^{***}$  \\
+                            & $(0.04)$      & $(0.04)$      \\
+treatmentlogos              & $0.45^{***}$  & $0.36^{***}$  \\
+                            & $(0.05)$      & $(0.02)$      \\
+treatmentcontrol            & $-0.15^{***}$ & $-0.21^{***}$ \\
+                            & $(0.06)$      & $(0.01)$      \\
+gendermale                  &               & $0.04^{***}$  \\
+                            &               & $(0.01)$      \\
+raceblack                   &               & $0.02$        \\
+                            &               & $(0.03)$      \\
+racehispanic                &               & $-0.01$       \\
+                            &               & $(0.03)$      \\
+raceother                   &               & $-0.06$       \\
+                            &               & $(0.05)$      \\
+racewhite                   &               & $-0.01$       \\
+                            &               & $(0.03)$      \\
+age\_group30-44             &               & $-0.02$       \\
+                            &               & $(0.02)$      \\
+age\_group45-64             &               & $-0.01$       \\
+                            &               & $(0.02)$      \\
+age\_group65+               &               & $-0.05^{**}$  \\
+                            &               & $(0.02)$      \\
+eduhigh school              &               & $-0.02$       \\
+                            &               & $(0.03)$      \\
+edusome college             &               & $0.01$        \\
+                            &               & $(0.03)$      \\
+edubachelor's or above      &               & $-0.03$       \\
+                            &               & $(0.03)$      \\
+income\_bracket25k-$<$50k   &               & $0.03$        \\
+                            &               & $(0.03)$      \\
+income\_bracket50k-$<$75k   &               & $0.03$        \\
+                            &               & $(0.03)$      \\
+income\_bracket75k-$<$120k  &               & $0.03$        \\
+                            &               & $(0.04)$      \\
+income\_bracket120k-$<$200k &               & $0.03$        \\
+                            &               & $(0.04)$      \\
+income\_bracket$>$=200k     &               & $0.06$        \\
+                            &               & $(0.07)$      \\
+fb\_usage                   &               & $0.01^{***}$  \\
+                            &               & $(0.00)$      \\
+vax\_percpt                 &               & $0.86^{***}$  \\
+                            &               & $(0.00)$      \\
+\hline
+Adj. R$^2$                  & $0.03$        & $0.91$        \\
+Num. obs.                   & $4500$        & $4500$        \\
+\hline
+\multicolumn{3}{l}{\scriptsize{$^{***}p<0.01$; $^{**}p<0.05$; $^{*}p<0.1$}}
+\end{tabular}
+\caption{}
+\label{table:coefficients}
+\end{center}
+\end{table}
+
+Differential effects of Facebook ad campaigns on vaccine uptake
+
+:::
