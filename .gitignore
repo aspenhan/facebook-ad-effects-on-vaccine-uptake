@@ -3,6 +3,8 @@
 .RData
 .Ruserdata
 
-# Ignore large files
+# Ignore unnecessary large files
 
 *.csv
+
+*.tex
